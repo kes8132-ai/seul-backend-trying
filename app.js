@@ -5,6 +5,7 @@ import {
   collection,
   addDoc,
   deleteDoc,
+  updateDoc,
   doc,
   getDocs,
   query,
@@ -112,6 +113,36 @@ async function deleteMemo(id) {
 
 
 // ===================================================
+// AI 코멘트 기능 (Gemini API)
+// ===================================================
+
+// 서버리스 함수(/api/gemini)를 통해 Gemini AI 코멘트 생성 요청
+async function requestAiComment(text) {
+  const res = await fetch("/api/gemini", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({ text: text })
+  });
+
+  const data = await res.json();
+  if (!res.ok) {
+    throw new Error(data.error || "AI 코멘트 생성 요청에 실패했습니다.");
+  }
+  return data.comment;
+}
+
+// 특정 메모에 AI 코멘트 저장 (Firestore update)
+async function addAiCommentToMemo(memoId, text) {
+  const comment = await requestAiComment(text);
+  await updateDoc(doc(db, "memos", memoId), {
+    aiComment: comment
+  });
+}
+
+
+// ===================================================
 // 구글 로그인 및 로그아웃
 // ===================================================
 
@@ -152,6 +183,35 @@ function renderUserArea() {
 
     userArea.appendChild(userSpan);
     userArea.appendChild(logoutBtn);
+
+    // 교사 전용: 전체 게시물 AI 코멘트 일괄 달기 버튼
+    if (isTeacher(currentUser)) {
+      const batchAiBtn = document.createElement("button");
+      batchAiBtn.className = "btn-batch-ai";
+      batchAiBtn.textContent = "🤖 전체 AI 피드백";
+      batchAiBtn.title = "아직 코멘트가 없는 모든 메모에 AI 코멘트를 일괄 생성합니다";
+      batchAiBtn.addEventListener("click", async function () {
+        batchAiBtn.disabled = true;
+        batchAiBtn.textContent = "⏳ 피드백 생성 중...";
+        try {
+          const memos = await loadMemos();
+          let count = 0;
+          for (const memo of memos) {
+            if (!memo.aiComment) {
+              await addAiCommentToMemo(memo.id, memo.text);
+              count++;
+            }
+          }
+          alert(`완료되었습니다! (${count}개의 게시물에 AI 코멘트가 생성되었습니다)`);
+        } catch (err) {
+          alert("AI 코멘트 생성 중 오류: " + err.message);
+        } finally {
+          batchAiBtn.disabled = false;
+          batchAiBtn.textContent = "🤖 전체 AI 피드백";
+        }
+      });
+      userArea.appendChild(batchAiBtn);
+    }
   } else {
     const noticeSpan = document.createElement("span");
     noticeSpan.textContent = "로그인하면 메모를 작성할 수 있습니다.";
@@ -219,6 +279,44 @@ function makeMemo(memo) {
     const authorBadge = memo.role === "teacher" ? "👑 " : "🎓 ";
     authorDiv.textContent = `${authorBadge}${memo.author}`;
     div.appendChild(authorDiv);
+  }
+
+  // AI 코멘트가 있는 경우 표시
+  if (memo.aiComment) {
+    const aiBox = document.createElement("div");
+    aiBox.className = "ai-comment";
+
+    const header = document.createElement("div");
+    header.className = "ai-comment-header";
+    header.textContent = "🤖 AI 선생님 코멘트";
+
+    const body = document.createElement("div");
+    body.textContent = memo.aiComment;
+
+    aiBox.appendChild(header);
+    aiBox.appendChild(body);
+    div.appendChild(aiBox);
+  }
+
+  // 교사 전용: 개별 게시물에 AI 코멘트 달기 버튼
+  if (isTeacherUser) {
+    const aiBtn = document.createElement("button");
+    aiBtn.className = "btn-ai";
+    aiBtn.textContent = memo.aiComment ? "🤖 AI 코멘트 다시 달기" : "🤖 AI 코멘트 달기";
+    aiBtn.addEventListener("click", async function () {
+      aiBtn.disabled = true;
+      aiBtn.textContent = "⏳ AI 생각 중...";
+      try {
+        await addAiCommentToMemo(memo.id, memo.text);
+      } catch (err) {
+        console.error("AI 코멘트 오류:", err);
+        alert("AI 코멘트 생성 실패: " + err.message);
+      } finally {
+        aiBtn.disabled = false;
+        aiBtn.textContent = memo.aiComment ? "🤖 AI 코멘트 다시 달기" : "🤖 AI 코멘트 달기";
+      }
+    });
+    div.appendChild(aiBtn);
   }
 
   return div;
