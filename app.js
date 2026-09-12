@@ -38,6 +38,27 @@ const provider = new GoogleAuthProvider();
 // 현재 로그인한 사용자 정보 (로그아웃 상태면 null)
 let currentUser = null;
 
+// ===================================================
+// 교사 / 학생 역할 구분 설정 (UID 기반)
+// ===================================================
+// 교사 권한을 부여할 계정의 UID를 아래 배열에 추가하세요.
+// (Firebase 콘솔 -> Authentication -> Users 탭에서 본인 계정의 UID 확인 가능)
+const TEACHER_UIDS = [
+  // 예: "1234567890abcdef" 형식의 UID
+];
+
+// 교사 여부 확인 함수
+function isTeacher(user) {
+  if (!user) return false;
+  return TEACHER_UIDS.includes(user.uid);
+}
+
+// 현재 로그인한 사용자의 역할 ("teacher" 또는 "student")
+function getCurrentRole() {
+  if (!currentUser) return null;
+  return isTeacher(currentUser) ? "teacher" : "student";
+}
+
 
 // ===================================================
 // 데이터를 다루는 함수 세 개
@@ -61,8 +82,8 @@ async function loadMemos() {
 
 // 메모를 새로 씁니다.
 // Firestore의 "memos" 컬렉션에 새 문서를 추가합니다.
-// 5글자 이상일 때만 저장되며, 로그인한 사용자의 식별자(uid)와 이름(author)을 함께 저장합니다.
-// 백엔드 2: 여기에 "누가 썼는지"(uid)를 함께 저장하게 됩니다.
+// 교사는 모든 권한을 가지며, 학생은 본인 메모만 생성할 수 있습니다.
+// 백엔드 2: 여기에 "누가 썼는지"(uid)와 역할(role)을 함께 저장합니다.
 async function addMemo(text) {
   if (!currentUser) {
     throw new Error("로그인이 필요합니다. 먼저 Google 계정으로 로그인해 주세요.");
@@ -70,17 +91,21 @@ async function addMemo(text) {
   if (text.length < 5) {
     throw new Error("메모는 5글자 이상이어야 합니다.");
   }
+
+  const role = getCurrentRole(); // "teacher" 또는 "student"
+
   await addDoc(collection(db, "memos"), {
     text: text,
     createdAt: Date.now(),
     uid: currentUser.uid,
-    author: currentUser.displayName || "익명 사용자"
+    author: currentUser.displayName || "익명 사용자",
+    role: role
   });
 }
 
 // 메모를 지웁니다.
 // Firestore의 "memos" 컬렉션에서 해당 ID의 문서를 삭제합니다.
-// 백엔드 2: 내가 쓴 메모만 지울 수 있도록 제한합니다.
+// 교사는 모든 메모를 지울 수 있고, 학생은 본인 메모만 지울 수 있습니다.
 async function deleteMemo(id) {
   await deleteDoc(doc(db, "memos", id));
 }
@@ -115,8 +140,11 @@ function renderUserArea() {
   userArea.innerHTML = "";
 
   if (currentUser) {
+    const role = getCurrentRole();
+    const roleBadge = role === "teacher" ? "👑 [교사]" : "🎓 [학생]";
+
     const userSpan = document.createElement("span");
-    userSpan.textContent = `👋 ${currentUser.displayName || "사용자"}님 환영합니다!`;
+    userSpan.textContent = `${roleBadge} ${currentUser.displayName || "사용자"}님 환영합니다!`;
 
     const logoutBtn = document.createElement("button");
     logoutBtn.textContent = "로그아웃";
@@ -157,14 +185,22 @@ function makeMemo(memo) {
   const div = document.createElement("div");
   div.className = "memo";
 
-  // 본인이 작성한 메모이거나 기존 메모(uid가 없는 경우)만 삭제 버튼(×) 표시
-  const isOwner = currentUser && (memo.uid === currentUser.uid || !memo.uid);
-  if (isOwner) {
+  // 권한 제어:
+  // 1. 교사는 모든 메모를 삭제할 수 있습니다.
+  // 2. 학생은 오직 자신이 작성한 메모만 삭제할 수 있습니다. (타인의 것은 건들지 못함)
+  const isTeacherUser = isTeacher(currentUser);
+  const isMyMemo = currentUser && (memo.uid === currentUser.uid || !memo.uid);
+  const canDelete = currentUser && (isTeacherUser || isMyMemo);
+
+  if (canDelete) {
     const del = document.createElement("button");
     del.textContent = "×";
-    del.title = "메모 삭제";
+    del.title = isTeacherUser && !isMyMemo ? "교사 권한으로 삭제" : "메모 삭제";
     del.addEventListener("click", async function () {
-      if (confirm("이 메모를 삭제하시겠습니까?")) {
+      const msg = isTeacherUser && !isMyMemo 
+        ? "교사 권한으로 이 메모를 삭제하시겠습니까?" 
+        : "이 메모를 삭제하시겠습니까?";
+      if (confirm(msg)) {
         await deleteMemo(memo.id);
         render();
       }
@@ -176,11 +212,12 @@ function makeMemo(memo) {
   span.textContent = memo.text;
   div.appendChild(span);
 
-  // 작성자 이름 표시
+  // 작성자 및 역할 표시
   if (memo.author) {
     const authorDiv = document.createElement("div");
     authorDiv.className = "author";
-    authorDiv.textContent = `✍️ ${memo.author}`;
+    const authorBadge = memo.role === "teacher" ? "👑 " : "🎓 ";
+    authorDiv.textContent = `${authorBadge}${memo.author}`;
     div.appendChild(authorDiv);
   }
 

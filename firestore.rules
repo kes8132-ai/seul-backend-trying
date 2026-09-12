@@ -2,20 +2,43 @@ rules_version = '2';
 
 service cloud.firestore {
   match /databases/{database}/documents {
+
+    // 교사 계정의 UID 목록을 여기에 등록하세요.
+    // (Firebase 콘솔 -> Authentication -> Users 탭의 UID 복사)
+    function isTeacher() {
+      return request.auth != null && 
+             request.auth.uid in [
+               // 예: "1234567890abcdef"
+             ];
+    }
+
+    // 로그인된 사용자인지 확인
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
     match /memos/{memoId} {
-      // 누구나 메모를 읽을 수 있습니다.
+      // 담벼락 읽기는 누구나 가능
       allow read: if true;
 
-      // 로그인한 사용자만 5글자 이상의 새 메모를 등록할 수 있습니다.
-      allow create: if request.auth != null
+      // [생성]
+      // 1. 교사는 자유롭게 생성 가능
+      // 2. 학생은 5글자 이상이며, 오직 본인(uid) 명의의 메모만 생성 가능
+      allow create: if isSignedIn()
                     && request.resource.data.text is string
                     && request.resource.data.text.size() >= 5
-                    && request.resource.data.uid == request.auth.uid;
+                    && (isTeacher() || request.resource.data.uid == request.auth.uid);
 
-      // 본인이 작성한 메모이거나 기존 메모(uid가 없는 경우)만 삭제할 수 있습니다.
-      allow delete: if request.auth != null
-                    && (!('uid' in resource.data) || resource.data.uid == request.auth.uid);
+      // [수정]
+      // 교사는 모든 메모 수정 가능, 학생은 타인의 메모를 수정할 수 없음
+      allow update: if isSignedIn()
+                    && (isTeacher() || resource.data.uid == request.auth.uid);
+
+      // [삭제]
+      // 1. 교사는 모든 메모 삭제 가능 (모든 권한)
+      // 2. 학생은 본인이 작성한 메모만 삭제 가능 (타인의 것은 건들지 못함)
+      allow delete: if isSignedIn()
+                    && (isTeacher() || resource.data.uid == request.auth.uid || !('uid' in resource.data));
     }
   }
 }
-
